@@ -186,17 +186,23 @@ class LeadBinanceStrategy(Strategy):
         bn_move_bps:     float = 20.0,
         limit_offset:    float = 0.01,
         min_seconds:     float = 60.0,
-        take_profit_bps: float = 500.0,  # sortie si mid monte de X bps (0=désactivé)
+        max_seconds:     float = 270.0,  # ne pas entrer dans les 30 dernières secondes
+        min_prob:        float = 0.0,    # up_mid minimum pour entrer UP (ex: 0.2)
+        max_prob:        float = 1.0,    # up_mid maximum pour entrer UP (ex: 0.8)
+        take_profit_bps: float = 500.0,
         stop_loss_bps:   float = 0.0,
-        max_hold_seconds:float = 30.0,   # sortie forcée après N secondes (0=désactivé)
+        max_hold_seconds:float = 30.0,
         size_usdc:       float = 100.0,
         queue_model:     str   = "conservative",
-        cooldown_ticks:  int   = 20,     # ~5s à 4Hz
+        cooldown_ticks:  int   = 20,
     ):
         super().__init__(name="LeadBinance")
         self.bn_move_bps      = bn_move_bps
         self.limit_offset     = limit_offset
         self.min_seconds      = min_seconds
+        self.max_seconds      = max_seconds
+        self.min_prob         = min_prob
+        self.max_prob         = max_prob
         self.take_profit_bps  = take_profit_bps
         self.stop_loss_bps    = stop_loss_bps
         self.max_hold_seconds = max_hold_seconds
@@ -233,10 +239,11 @@ class LeadBinanceStrategy(Strategy):
             entry_ts  = tick.get("_entry_ts") or self._entry_ts.get(slug)
             cur_ts    = tick.get("timestamp_utc")
 
-            if (up_mid is not None and not pd.isna(up_mid)
-                    and entry_price is not None and float(entry_price) > 0):
-                up_mid   = float(up_mid)
-                move_bps = (up_mid - float(entry_price)) / float(entry_price) * 10000
+            direction = tick.get("_entry_direction", "UP")
+            current_mid = tick.get("down_mid") if direction == "DOWN" else tick.get("up_mid")
+            if current_mid is not None and not pd.isna(current_mid) and entry_price is not None and float(entry_price) > 0:
+                current_mid = float(current_mid)
+                move_bps = (current_mid - float(entry_price)) / float(entry_price) * 10000
                 if self.take_profit_bps > 0 and move_bps >= self.take_profit_bps:
                     return ExitSignal(slug=slug, reason=f"take_profit +{move_bps:.0f}bps")
                 if self.stop_loss_bps > 0 and move_bps <= -self.stop_loss_bps:
@@ -255,8 +262,11 @@ class LeadBinanceStrategy(Strategy):
 
         # ── Filtres pre-entry ─────────────────────────────────────────────────
         sec = tick.get("seconds_remaining")
-        if sec is None or pd.isna(sec) or float(sec) < self.min_seconds:
+        if sec is None or pd.isna(sec):
             return None
+        sec = float(sec)
+        if sec < self.min_seconds or sec > self.max_seconds:
+            return None  # trop tôt ou trop tard dans la fenêtre
 
         # Cooldown
         if self._last_signal_tick.get(slug, 999) < self.cooldown_ticks:
@@ -280,7 +290,8 @@ class LeadBinanceStrategy(Strategy):
         dn_bid = float(dn_bid)
 
         # Move UP sur Binance → acheter UP
-        if bn_ret >= self.bn_move_bps:
+        # Filtre prob : ne pas acheter UP si déjà trop haut
+        if bn_ret >= self.bn_move_bps and self.min_prob <= up_mid <= self.max_prob:
             limit_price = round(up_bid + self.limit_offset, 4)
             # S'assurer que le limit est sous l'ask (sinon ordre marketable)
             up_ask = tick.get("up_ask")
@@ -302,7 +313,9 @@ class LeadBinanceStrategy(Strategy):
             )
 
         # Move DOWN sur Binance → acheter DOWN
-        if bn_ret <= -self.bn_move_bps:
+        # Pour DOWN : up_mid doit être élevé (≥ 1-max_prob)
+        dn_mid = 1.0 - up_mid  # approximation
+        if bn_ret <= -self.bn_move_bps and self.min_prob <= dn_mid <= self.max_prob:
             limit_price = round(dn_bid + self.limit_offset, 4)
             dn_ask = tick.get("down_ask")
             if dn_ask is not None and not pd.isna(dn_ask):
