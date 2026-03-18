@@ -194,9 +194,9 @@ class LeadBinanceStrategy(Strategy):
         max_hold_seconds:     float = 30.0,
         size_usdc:            float = 100.0,
         queue_model:          str   = "conservative",
-        cooldown_ticks:        int   = 20,
+        cooldown_ticks:       int   = 20,
         cooldown_after_loss_s: float = 60.0,
-        require_trend_aligned: bool  = True,   # coin_return_60s aligné avec signal
+        require_trend_aligned: bool  = True,
     ):
         super().__init__(name="LeadBinance")
         self.bn_move_bps            = bn_move_bps
@@ -308,7 +308,7 @@ class LeadBinanceStrategy(Strategy):
         up_mid = float(up_mid)
         dn_bid = float(dn_bid)
 
-        # Filtre tendance 60s — éviter les rebonds dans la tendance inverse
+        # Filtre tendance 60s
         ret60 = tick.get("coin_return_60s_bps")
         ret60 = float(ret60) if ret60 is not None and not pd.isna(ret60) else 0.0
 
