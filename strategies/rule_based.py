@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Optional
 import pandas as pd
 
-from strategies.base import Strategy, Signal, LimitSignal, ExitSignal, Direction
+from strategies.base import Strategy, Signal, ExitSignal, Direction
 
 
 class EdgeZScoreStrategy(Strategy):
@@ -186,23 +186,26 @@ class LeadBinanceStrategy(Strategy):
         bn_move_bps:     float = 20.0,
         limit_offset:    float = 0.01,
         min_seconds:     float = 60.0,
-        take_profit_bps: float = 0.0,
+        take_profit_bps: float = 500.0,  # sortie si mid monte de X bps (0=désactivé)
         stop_loss_bps:   float = 0.0,
+        max_hold_seconds:float = 30.0,   # sortie forcée après N secondes (0=désactivé)
         size_usdc:       float = 100.0,
         queue_model:     str   = "conservative",
-        cooldown_ticks:  int   = 8,   # ~2s à 4Hz
+        cooldown_ticks:  int   = 20,     # ~5s à 4Hz
     ):
         super().__init__(name="LeadBinance")
-        self.bn_move_bps     = bn_move_bps
-        self.limit_offset    = limit_offset
-        self.min_seconds     = min_seconds
-        self.take_profit_bps = take_profit_bps
-        self.stop_loss_bps   = stop_loss_bps
-        self.size_usdc       = size_usdc
-        self.queue_model     = queue_model
-        self.cooldown_ticks  = cooldown_ticks
-        self._last_signal_tick: dict = {}   # slug → tick count depuis dernier signal
-        self._entry_mid:        dict = {}   # slug → up_mid à l'entrée
+        self.bn_move_bps      = bn_move_bps
+        self.limit_offset     = limit_offset
+        self.min_seconds      = min_seconds
+        self.take_profit_bps  = take_profit_bps
+        self.stop_loss_bps    = stop_loss_bps
+        self.max_hold_seconds = max_hold_seconds
+        self.size_usdc        = size_usdc
+        self.queue_model      = queue_model
+        self.cooldown_ticks   = cooldown_ticks
+        self._last_signal_tick: dict = {}
+        self._entry_mid:        dict = {}
+        self._entry_ts:         dict = {}   # slug → timestamp d'entrée
 
     def on_window_start(self, slug: str, tick) -> None:
         self._last_signal_tick[slug] = 999  # ready dès le début
@@ -218,20 +221,31 @@ class LeadBinanceStrategy(Strategy):
         # ── Incrémenter le cooldown ───────────────────────────────────────────
         self._last_signal_tick[slug] = self._last_signal_tick.get(slug, 999) + 1
 
-        # ── Exit : take profit / stop loss ────────────────────────────────────
+        # ── Exit : take profit / stop loss / max hold ──────────────────────────
         if has_position:
-            up_mid   = tick.get("up_mid")
+            up_mid    = tick.get("up_mid")
             entry_mid = self._entry_mid.get(slug)
-            if (up_mid is not None and not pd.isna(up_mid)
-                    and entry_mid is not None):
-                up_mid = float(up_mid)
-                move_bps = (up_mid - entry_mid) / entry_mid * 10000
+            entry_ts  = self._entry_ts.get(slug)
+            cur_ts    = tick.get("timestamp_utc")
 
+            if (up_mid is not None and not pd.isna(up_mid)
+                    and entry_mid is not None and float(entry_mid) > 0):
+                up_mid   = float(up_mid)
+                move_bps = (up_mid - float(entry_mid)) / float(entry_mid) * 10000
                 if self.take_profit_bps > 0 and move_bps >= self.take_profit_bps:
                     return ExitSignal(slug=slug, reason=f"take_profit +{move_bps:.0f}bps")
-
                 if self.stop_loss_bps > 0 and move_bps <= -self.stop_loss_bps:
                     return ExitSignal(slug=slug, reason=f"stop_loss {move_bps:.0f}bps")
+
+            # Max hold — sortie forcée après N secondes
+            if (self.max_hold_seconds > 0 and entry_ts is not None
+                    and cur_ts is not None):
+                try:
+                    held = (pd.Timestamp(cur_ts) - pd.Timestamp(entry_ts)).total_seconds()
+                    if held >= self.max_hold_seconds:
+                        return ExitSignal(slug=slug, reason=f"max_hold {held:.0f}s")
+                except Exception:
+                    pass
             return None
 
         # ── Filtres pre-entry ─────────────────────────────────────────────────
@@ -272,6 +286,7 @@ class LeadBinanceStrategy(Strategy):
 
             self._last_signal_tick[slug] = 0
             self._entry_mid[slug] = up_mid
+            self._entry_ts[slug]  = tick.get("timestamp_utc")
             return LimitSignal(
                 direction    = Direction.UP,
                 size_usdc    = self.size_usdc,
@@ -291,7 +306,8 @@ class LeadBinanceStrategy(Strategy):
                 return None
 
             self._last_signal_tick[slug] = 0
-            self._entry_mid[slug] = dn_bid  # approximation
+            self._entry_mid[slug] = dn_bid
+            self._entry_ts[slug]  = tick.get("timestamp_utc")
             return LimitSignal(
                 direction    = Direction.DOWN,
                 size_usdc    = self.size_usdc,
