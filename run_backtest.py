@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).parent / "strategies"))
 
 import data as D
 import engine as E
+import data as D
 from metrics import print_report
 from strategies.rule_based import EdgeZScoreStrategy, FlowMomentumStrategy, LeadBinanceStrategy
 from strategies.ml_based   import MLStrategy, train_model
@@ -159,14 +160,29 @@ def run_single(args):
           f"  market_impact={args.market_impact}"
           f"  capital={args.capital:.0f} USDC")
 
-    result = E.run(
-        df=df, strategy=strat,
-        initial_capital  = args.capital,
-        latency_ms       = args.latency,
-        market_impact    = args.market_impact,
-        verbose          = args.verbose,
-        max_positions    = args.max_pos,
-    )
+    # Utiliser run_streaming si filtres actifs (RAM constante)
+    if args.coin or args.interval:
+        result = E.run_streaming(
+            live_dir       = args.dir,
+            strategy       = strat,
+            initial_capital= args.capital,
+            latency_ms     = args.latency,
+            verbose        = args.verbose,
+            max_positions  = args.max_pos,
+            coin           = args.coin,
+            interval       = args.interval,
+            start          = args.start_date,
+            end            = args.end_date,
+        )
+    else:
+        result = E.run(
+            df=df, strategy=strat,
+            initial_capital  = args.capital,
+            latency_ms       = args.latency,
+            market_impact    = args.market_impact,
+            verbose          = args.verbose,
+            max_positions    = args.max_pos,
+        )
 
     print_report(result["metrics"])
     print(f"\n  Windows: {result['n_windows']}  |  Skipped: {result['n_skipped']}")

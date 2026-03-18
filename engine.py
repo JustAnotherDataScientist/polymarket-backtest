@@ -13,7 +13,7 @@ from collections import deque
 from typing import Optional
 import pandas as pd
 
-from data import iter_windows
+from data import iter_windows, iter_windows_streaming
 from execution import simulate_buy, simulate_sell, simulate_buy_down, simulate_sell_down, \
     simulate_limit_buy, simulate_limit_buy_down, Fill
 from portfolio import Portfolio
@@ -23,6 +23,12 @@ from strategies.base import Strategy, Signal, LimitSignal, ExitSignal, Direction
 logger = logging.getLogger(__name__)
 
 TICK_MS = 250   # ms par tick (4 Hz)
+
+# NOTE latence critique :
+# latency_ms=0 et latency_ms=250 sont IDENTIQUES en pratique.
+# L'ordre est créé en step 4 (signal), mais les fills sont traités en step 1b
+# au tick suivant. Donc la latence minimale réelle est toujours 1 tick = 250ms.
+# Valeurs significatives : 250ms, 500ms, 750ms, 1000ms
 
 
 class PendingOrder:
@@ -62,7 +68,7 @@ def run(
     df:              pd.DataFrame,
     strategy:        Strategy,
     initial_capital: float = 10_000.0,
-    latency_ms:      float = 0.0,      # ← NOUVEAU : latence en ms
+    latency_ms:      float = 250.0,    # latence en ms (min réel = 250ms = 1 tick)
     market_impact:   bool  = True,     # ← NOUVEAU : modéliser impact
     verbose:         bool  = False,
     max_positions:   int   = 4,
@@ -287,3 +293,113 @@ def run(
             "initial_capital": initial_capital,
         }
     }
+
+
+def run_streaming(
+    live_dir:        str,
+    strategy,
+    initial_capital: float = 10_000.0,
+    latency_ms:      float = 250.0,
+    verbose:         bool  = False,
+    max_positions:   int   = 4,
+    coin:            str   = None,
+    interval:        int   = None,
+    start:           str   = None,
+    end:             str   = None,
+) -> dict:
+    """
+    Version streaming de run() — RAM constante quelle que soit la durée.
+    Lit les parquets fenetre par fenetre sans tout charger en memoire.
+    Utiliser pour les backtests sur > 1 jour de donnees.
+    """
+    portfolio = Portfolio(initial_capital=initial_capital)
+    strategy.reset()
+    pending: deque = deque()
+    n_windows = 0
+    n_skipped = 0
+
+    for window in iter_windows_streaming(live_dir, coin, interval, start, end):
+        slug         = window["slug"].iloc[0]
+        coin_w       = window["coin"].iloc[0]
+        iv           = str(window["interval_min"].iloc[0])
+        oc_s         = window["outcome"].dropna() if "outcome" in window.columns else pd.Series(dtype=str)
+        outcome_val  = str(oc_s.iloc[-1]) if len(oc_s) > 0 else None
+
+        if outcome_val is None:
+            n_skipped += 1
+            continue
+
+        n_windows += 1
+        strategy.on_window_start(slug, window.iloc[0])
+
+        for _, tick in window.iterrows():
+            ts        = tick["timestamp_utc"]
+            td        = tick.to_dict()
+            has_pos   = portfolio.has_position(slug)
+
+            # Fill market orders
+            done = []
+            for o in list(pending):
+                if o.slug != slug or not isinstance(o, PendingOrder): continue
+                if ts >= o.fill_after_ts and not portfolio.has_position(o.slug):
+                    sig  = o.signal
+                    fill = simulate_buy(td, sig.size_usdc) if sig.direction == Direction.UP else simulate_buy_down(td, sig.size_usdc)
+                    if fill:
+                        portfolio.open(o.slug, o.coin, o.interval_min, ts, fill, direction=sig.direction.value)
+                    done.append(o)
+            for o in done:
+                try: pending.remove(o)
+                except ValueError: pass
+
+            # Fill limit orders
+            done2 = []
+            for o in list(pending):
+                if o.slug != slug or not isinstance(o, PendingLimitOrder): continue
+                if ts >= o.fill_after_ts and not portfolio.has_position(o.slug):
+                    sig  = o.signal
+                    fill = simulate_limit_buy([td], sig.limit_price, sig.size_usdc, sig.queue_model) if sig.direction == Direction.UP else simulate_limit_buy_down([td], sig.limit_price, sig.size_usdc, sig.queue_model)
+                    if fill:
+                        portfolio.open(o.slug, o.coin, o.interval_min, ts, fill, direction=sig.direction.value)
+                        done2.append(o)
+            for o in done2:
+                try: pending.remove(o)
+                except ValueError: pass
+
+            has_pos = portfolio.has_position(slug)
+            signal  = strategy.on_tick(slug, tick, has_pos)
+
+            if signal is None:
+                pass
+            elif isinstance(signal, ExitSignal) and has_pos:
+                pos       = portfolio.positions[slug]
+                direction = getattr(pos, "direction", "UP")
+                ef = None
+                if direction == "UP":
+                    um = tick.get("up_mid")
+                    if um is not None and not pd.isna(um):
+                        ef = simulate_sell(td, pos.tokens * float(um))
+                else:
+                    dm = tick.get("down_mid")
+                    if dm is not None and not pd.isna(dm):
+                        ef = simulate_sell_down(td, pos.tokens * float(dm))
+                portfolio.close(slug=slug, ts=ts, exit_fill=ef, outcome=outcome_val, reason=signal.reason)
+
+            elif isinstance(signal, (Signal, LimitSignal)) and not has_pos:
+                if portfolio.n_open < max_positions and not any(o.slug == slug for o in pending):
+                    if isinstance(signal, LimitSignal):
+                        pending.append(PendingLimitOrder(signal=signal, slug=slug, coin=coin_w, interval_min=iv, submit_ts=ts, latency_ms=latency_ms))
+                    else:
+                        pending.append(PendingOrder(signal=signal, slug=slug, coin=coin_w, interval_min=iv, submit_ts=ts, latency_ms=latency_ms))
+
+        strategy.on_window_end(slug, window.iloc[-1])
+        for o in [o for o in pending if o.slug == slug]:
+            try: pending.remove(o)
+            except ValueError: pass
+        if portfolio.has_position(slug):
+            portfolio.close(slug=slug, ts=window.iloc[-1]["timestamp_utc"], exit_fill=None, outcome=outcome_val, reason="close")
+
+    metrics  = compute_metrics(portfolio.trades, initial_capital)
+    eq_curve = equity_curve(portfolio.trades, initial_capital)
+    return {"metrics": metrics, "trades": portfolio.trades, "equity_curve": eq_curve,
+            "portfolio": portfolio, "n_windows": n_windows, "n_skipped": n_skipped,
+            "config": {"latency_ms": latency_ms, "max_positions": max_positions, "initial_capital": initial_capital}}

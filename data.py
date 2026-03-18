@@ -173,8 +173,10 @@ def window_summary(df: pd.DataFrame) -> dict:
 def iter_windows(df: pd.DataFrame):
     """
     Itère sur les fenêtres de marché du DataFrame.
-    Chaque fenêtre = tous les ticks d'un même slug (coin + interval + window_start).
-    Utilisé par engine.py pour rejouer tick par tick.
+    Chaque fenêtre = tous les ticks d'un même slug.
+
+    NOTE performance : utiliser iter_windows_streaming() pour les grands datasets
+    (> 1 jour de données) pour éviter le groupby en mémoire.
 
     Yields:
         DataFrame — tous les ticks d'une fenêtre, triés par timestamp_utc
@@ -182,8 +184,89 @@ def iter_windows(df: pd.DataFrame):
     if "slug" not in df.columns:
         raise ValueError("Colonne 'slug' manquante — nécessaire pour iter_windows()")
 
-    for slug, group in df.groupby("slug", sort=False):
-        yield group.sort_values("timestamp_utc").reset_index(drop=True)
+    # Trier une seule fois par (slug, timestamp)
+    df_sorted = df.sort_values(["slug", "timestamp_utc"])
+    for slug, group in df_sorted.groupby("slug", sort=False):
+        yield group.reset_index(drop=True)
+
+
+def iter_windows_streaming(
+    live_dir: str,
+    coin:     Optional[str] = None,
+    interval: Optional[int] = None,
+    start:    Optional[str] = None,
+    end:      Optional[str] = None,
+):
+    """
+    Version streaming de iter_windows — RAM constante quelle que soit la durée.
+
+    Au lieu de charger tout le DataFrame, lit les parquets slug par slug.
+    RAM utilisée : ~1 fenêtre (~500 ticks) à la fois.
+
+    Utilisé par engine.run_streaming() pour les backtests sur grandes données.
+
+    Yields:
+        (slug, DataFrame) — une fenêtre à la fois
+    """
+    p = Path(live_dir)
+    finals = sorted(p.glob("[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].parquet"))
+    chunks = sorted(p.glob("[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]_*.parquet"))
+
+    # Filtrer par date
+    def in_range(f):
+        d = f.name[:10]
+        if start and d < start: return False
+        if end   and d > end:   return False
+        return True
+
+    finals = [f for f in finals if in_range(f)]
+    chunks = [f for f in chunks if in_range(f)]
+    final_dates = {f.name[:10] for f in finals}
+    files = finals + [c for c in chunks if c.name[:10] not in final_dates]
+    files = sorted(files)
+
+    if not files:
+        raise FileNotFoundError(f"Aucun parquet dans {live_dir}")
+
+    # Accumuler les ticks par slug en lisant les fichiers un par un
+    slug_buffers: dict = {}
+
+    for fpath in files:
+        try:
+            df_file = pd.read_parquet(fpath)
+        except Exception as e:
+            print(f"  ⚠ {fpath.name} illisible : {e}")
+            continue
+
+        # Filtres
+        if coin:
+            df_file = df_file[df_file["coin"] == coin]
+        if interval:
+            df_file = df_file[df_file["interval_min"] == str(interval)]
+
+        if df_file.empty:
+            continue
+
+        df_file["timestamp_utc"] = pd.to_datetime(
+            df_file["timestamp_utc"], utc=True, errors="coerce"
+        )
+
+        # Colonnes numériques
+        for col in NUMERIC_COLS:
+            if col in df_file.columns:
+                df_file[col] = pd.to_numeric(df_file[col], errors="coerce")
+
+        # Grouper par slug dans ce chunk
+        for slug, grp in df_file.groupby("slug", sort=False):
+            if slug not in slug_buffers:
+                slug_buffers[slug] = []
+            slug_buffers[slug].append(grp)
+
+    # Yield chaque fenêtre complète
+    for slug, chunks_list in sorted(slug_buffers.items()):
+        window = pd.concat(chunks_list, ignore_index=True)
+        window = window.sort_values("timestamp_utc").reset_index(drop=True)
+        yield window
 
 
 def window_summary(df: pd.DataFrame) -> dict:
