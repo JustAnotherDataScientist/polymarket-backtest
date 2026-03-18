@@ -102,17 +102,9 @@ def load(
     # Normalize outcome
     df["outcome"] = df["outcome"].astype(str).replace({"": np.nan, "nan": np.nan})
 
-    # Désérialiser les colonnes JSON book complet → listes Python [[price, size], ...]
-    for col in ("up_book_bids", "up_book_asks", "down_book_bids", "down_book_asks"):
-        if col in df.columns:
-            def _parse_book(val):
-                if not val or str(val) in ("", "nan", "None", "[]"):
-                    return []
-                try:
-                    return json.loads(val)
-                except Exception:
-                    return []
-            df[col] = df[col].apply(_parse_book)
+    # NOTE : les colonnes JSON book (up_book_bids/asks, down_book_bids/asks)
+    # sont intentionnellement laissées en string.
+    # Utiliser get_book(tick, col) dans l'engine pour désérialiser lazily.
 
     # Filters
     if coin:
