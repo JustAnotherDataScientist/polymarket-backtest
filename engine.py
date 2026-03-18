@@ -358,11 +358,12 @@ def run_streaming(
                 try: pending.remove(o)
                 except ValueError: pass
 
-            # Fill limit orders
+            # Fill limit orders — accumuler les ticks dans le buffer
             done2 = []
             for o in list(pending):
                 if o.slug != slug or not isinstance(o, PendingLimitOrder): continue
                 if ts >= o.fill_after_ts and not portfolio.has_position(o.slug):
+                    o.tick_buffer.append(td)
                     sig  = o.signal
                     fill = simulate_limit_buy([td], sig.limit_price, sig.size_usdc, sig.queue_model) if sig.direction == Direction.UP else simulate_limit_buy_down([td], sig.limit_price, sig.size_usdc, sig.queue_model)
                     if fill:

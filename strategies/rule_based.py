@@ -316,11 +316,20 @@ class LeadBinanceStrategy(Strategy):
         if (bn_ret >= self.bn_move_bps
                 and self.min_prob <= up_mid <= self.max_prob
                 and (not self.require_trend_aligned or ret60 >= 0)):
-            limit_price = round(up_bid + self.limit_offset, 4)
-            # S'assurer que le limit est sous l'ask (sinon ordre marketable)
             up_ask = tick.get("up_ask")
             if up_ask is not None and not pd.isna(up_ask):
-                limit_price = min(limit_price, float(up_ask) - 0.005)
+                up_ask_f = float(up_ask)
+                # Placer au bid (maker pur) si spread = 1 tick
+                # Placer à mid si spread > 1 tick (meilleure chance de fill)
+                spread = up_ask_f - up_bid
+                if spread <= 0.011:
+                    limit_price = up_bid  # maker au bid
+                else:
+                    limit_price = round(up_bid + self.limit_offset, 4)
+                    limit_price = min(limit_price, up_ask_f - 0.01)
+            else:
+                limit_price = round(up_bid + self.limit_offset, 4)
+            limit_price = round(limit_price, 4)
             if limit_price <= 0 or limit_price >= 1:
                 return None
 
@@ -341,10 +350,18 @@ class LeadBinanceStrategy(Strategy):
         if (bn_ret <= -self.bn_move_bps
                 and self.min_prob <= dn_mid <= self.max_prob
                 and (not self.require_trend_aligned or ret60 <= 0)):
-            limit_price = round(dn_bid + self.limit_offset, 4)
             dn_ask = tick.get("down_ask")
             if dn_ask is not None and not pd.isna(dn_ask):
-                limit_price = min(limit_price, float(dn_ask) - 0.005)
+                dn_ask_f = float(dn_ask)
+                spread_dn = dn_ask_f - dn_bid
+                if spread_dn <= 0.011:
+                    limit_price = dn_bid
+                else:
+                    limit_price = round(dn_bid + self.limit_offset, 4)
+                    limit_price = min(limit_price, dn_ask_f - 0.01)
+            else:
+                limit_price = round(dn_bid + self.limit_offset, 4)
+            limit_price = round(limit_price, 4)
             if limit_price <= 0 or limit_price >= 1:
                 return None
 
