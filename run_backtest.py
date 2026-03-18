@@ -56,13 +56,17 @@ def build_strategy(args):
                           size_usdc=args.size)
     elif args.strategy == "lead_binance":
         return LeadBinanceStrategy(
-            bn_move_bps     = args.bn_move,
-            limit_offset    = args.limit_offset,
-            min_seconds     = args.min_sec,
-            take_profit_bps = args.take_profit,
-            stop_loss_bps   = args.stop_loss_bps,
-            size_usdc       = args.size,
-            queue_model     = args.queue_model,
+            bn_move_bps          = args.bn_move,
+            limit_offset         = args.limit_offset,
+            min_seconds          = args.min_sec,
+            take_profit_bps      = args.take_profit,
+            stop_loss_bps        = args.stop_loss_bps,
+            size_usdc            = args.size,
+            queue_model          = args.queue_model,
+            min_prob             = args.min_prob,
+            max_prob             = args.max_prob,
+            max_hold_seconds     = args.max_hold,
+            cooldown_after_loss_s= args.cooldown_loss,
         )
     raise ValueError(f"Unknown strategy: {args.strategy}")
 
@@ -234,6 +238,14 @@ def main():
                    help="Stop loss en bps depuis entrée (0=désactivé)")
     p.add_argument("--queue-model",  default="conservative",
                    choices=["conservative","optimistic"])
+    p.add_argument("--min-prob",     type=float, default=0.0,
+                   help="up_mid minimum pour entrer UP (défaut: 0.0)")
+    p.add_argument("--max-prob",     type=float, default=1.0,
+                   help="up_mid maximum pour entrer UP (défaut: 1.0)")
+    p.add_argument("--max-hold",     type=float, default=30.0,
+                   help="Max hold seconds avant sortie forcée (défaut: 30)")
+    p.add_argument("--cooldown-loss",type=float, default=60.0,
+                   help="Cooldown en secondes après stop loss (défaut: 60)")
     # ML
     p.add_argument("--model-type", default="xgboost",
                    choices=["xgboost","random_forest","logistic"])

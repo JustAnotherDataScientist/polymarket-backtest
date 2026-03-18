@@ -201,12 +201,12 @@ def run(
                 direction = getattr(pos, "direction", "UP")
                 exit_fill = None
                 if direction == "UP":
-                    up_mid = tick.get("up_mid")
+                    up_mid = tick_dict.get("up_mid")
                     if up_mid is not None and not pd.isna(up_mid):
                         sell_size = pos.tokens * float(up_mid)
                         exit_fill = simulate_sell(tick_dict, sell_size)
                 else:  # DOWN
-                    down_mid = tick.get("down_mid")
+                    down_mid = tick_dict.get("down_mid")
                     if down_mid is not None and not pd.isna(down_mid):
                         sell_size = pos.tokens * float(down_mid)
                         exit_fill = simulate_sell_down(tick_dict, sell_size)
@@ -388,11 +388,11 @@ def run_streaming(
                 direction = getattr(pos, "direction", "UP")
                 ef = None
                 if direction == "UP":
-                    um = tick.get("up_mid")
+                    um = td.get("up_mid")
                     if um is not None and not pd.isna(um):
                         ef = simulate_sell(td, pos.tokens * float(um))
                 else:
-                    dm = tick.get("down_mid")
+                    dm = td.get("down_mid")
                     if dm is not None and not pd.isna(dm):
                         ef = simulate_sell_down(td, pos.tokens * float(dm))
                 portfolio.close(slug=slug, ts=ts, exit_fill=ef, outcome=outcome_val, reason=signal.reason)

@@ -21,13 +21,15 @@ class Trade:
     exit_ts:        Optional[pd.Timestamp] = None
     exit_fill:      Optional[Fill]         = None
     outcome:        Optional[str]          = None
-    exit_reason:    str                    = ""  # "close", "stop_loss", "signal_exit"
+    exit_reason:    str                    = ""
+    direction:      str                    = "UP"  # "UP" ou "DOWN"
 
     @property
     def pnl(self) -> float:
         if self.outcome is None and self.exit_fill is None:
             return 0.0
-        return compute_pnl(self.entry_fill, self.exit_fill, self.outcome or "0")
+        return compute_pnl(self.entry_fill, self.exit_fill,
+                           self.outcome or "0", direction=self.direction)
 
     @property
     def pnl_bps(self) -> float:
@@ -111,6 +113,7 @@ class Portfolio:
             entry_ts=pos.entry_ts, entry_fill=pos.entry_fill,
             exit_ts=ts, exit_fill=exit_fill,
             outcome=outcome, exit_reason=reason,
+            direction=getattr(pos, "direction", "UP"),
         )
 
         # Récupère le cash

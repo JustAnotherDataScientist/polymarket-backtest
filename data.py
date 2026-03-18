@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Iterator
+from typing import Iterator, Optional
 import numpy as np
 import pandas as pd
 
@@ -138,37 +138,6 @@ def get_book(tick: dict, col: str) -> list:
         except (json.JSONDecodeError, ValueError):
             return []
     return []
-
-def iter_windows(df: pd.DataFrame) -> Iterator[pd.DataFrame]:
-    """
-    Iterate over individual market windows (by slug).
-    Each window = all ticks for one slug, sorted by time.
-    Only yields windows with known outcome.
-    """
-    for slug, group in df.groupby("slug"):
-        group = group.sort_values("timestamp_utc").reset_index(drop=True)
-        # Only yield windows with known outcome
-        outcome = group["outcome"].dropna()
-        if len(outcome) == 0:
-            continue
-        if not set(outcome.unique()) <= {"0", "1", "0.0", "1.0"}:
-            continue
-        yield group
-
-
-def window_summary(df: pd.DataFrame) -> dict:
-    """Summary stats for a loaded dataset."""
-    return {
-        "total_rows":    len(df),
-        "total_windows": df["slug"].nunique(),
-        "labeled_windows": df.groupby("slug")["outcome"].apply(
-            lambda x: x.dropna().isin(["0","1","0.0","1.0"]).any()
-        ).sum(),
-        "date_range":    (df["timestamp_utc"].min(), df["timestamp_utc"].max()),
-        "coins":         sorted(df["coin"].unique().tolist()),
-        "intervals":     sorted(df["interval_min"].astype(str).unique().tolist()),
-    }
-
 
 def iter_windows(df: pd.DataFrame):
     """

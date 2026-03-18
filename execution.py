@@ -356,8 +356,8 @@ def simulate_limit_buy(
         → fill dès que le prix touche notre limite (on est en tête)
     """
     for tick in tick_sequence:
-        asks = tick.get("up_book_asks")
-        if not asks or not isinstance(asks, list):
+        asks = get_book(tick, "up_book_asks")
+        if not asks:
             # Fallback tick synthétique
             p = tick.get("up_ask")
             if p is None:
@@ -401,8 +401,8 @@ def simulate_limit_buy_down(
     Même logique que simulate_limit_buy mais utilise down_book_asks.
     """
     for tick in tick_sequence:
-        asks = tick.get("down_book_asks")
-        if not asks or not isinstance(asks, list):
+        asks = get_book(tick, "down_book_asks")
+        if not asks:
             p = tick.get("down_ask")
             if p is None:
                 continue
