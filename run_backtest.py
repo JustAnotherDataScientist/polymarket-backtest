@@ -30,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).parent / "strategies"))
 import data as D
 import engine as E
 from metrics import print_report
-from strategies.rule_based import EdgeZScoreStrategy, FlowMomentumStrategy
+from strategies.rule_based import EdgeZScoreStrategy, FlowMomentumStrategy, LeadBinanceStrategy
 from strategies.ml_based   import MLStrategy, train_model
 
 logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(message)s")
@@ -53,6 +53,16 @@ def build_strategy(args):
         return MLStrategy(model=model, threshold=args.threshold,
                           min_edge_bps=args.min_edge, min_seconds=args.min_sec,
                           size_usdc=args.size)
+    elif args.strategy == "lead_binance":
+        return LeadBinanceStrategy(
+            bn_move_bps     = args.bn_move,
+            limit_offset    = args.limit_offset,
+            min_seconds     = args.min_sec,
+            take_profit_bps = args.take_profit,
+            stop_loss_bps   = args.stop_loss_bps,
+            size_usdc       = args.size,
+            queue_model     = args.queue_model,
+        )
     raise ValueError(f"Unknown strategy: {args.strategy}")
 
 
@@ -114,6 +124,9 @@ def run_compare(args):
         ("EdgeZScore_300",  EdgeZScoreStrategy(min_edge_bps=300, min_z_score=1.5, size_usdc=args.size)),
         ("EdgeZScore_500",  EdgeZScoreStrategy(min_edge_bps=500, min_z_score=2.0, size_usdc=args.size)),
         ("FlowMomentum",    FlowMomentumStrategy(size_usdc=args.size)),
+        ("LeadBinance_20",  LeadBinanceStrategy(bn_move_bps=20, size_usdc=args.size)),
+        ("LeadBinance_30",  LeadBinanceStrategy(bn_move_bps=30, size_usdc=args.size)),
+        ("LeadBinance_opt", LeadBinanceStrategy(bn_move_bps=20, queue_model="optimistic", size_usdc=args.size)),
     ]
     lat = args.latency
 
@@ -170,7 +183,7 @@ def run_single(args):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--strategy",   default="edge_zscore",
-                   choices=["edge_zscore","flow_momentum","ml"])
+                   choices=["edge_zscore","flow_momentum","ml","lead_binance"])
     p.add_argument("--compare",        action="store_true")
     p.add_argument("--latency-sweep",  action="store_true",
                    help="Compare latency 0/50/100/250/500/1000ms")
@@ -194,6 +207,17 @@ def main():
     p.add_argument("--min-sec",    type=float, default=30.0)
     p.add_argument("--size",       type=float, default=100.0)
     p.add_argument("--stop-loss",  type=float, default=None)
+    # Lead Binance params
+    p.add_argument("--bn-move",      type=float, default=20.0,
+                   help="Seuil move Binance 10s en bps (défaut: 20)")
+    p.add_argument("--limit-offset", type=float, default=0.01,
+                   help="Offset limit au-dessus du bid (défaut: 0.01)")
+    p.add_argument("--take-profit",  type=float, default=0.0,
+                   help="Take profit en bps depuis entrée (0=hold)")
+    p.add_argument("--stop-loss-bps",type=float, default=0.0,
+                   help="Stop loss en bps depuis entrée (0=désactivé)")
+    p.add_argument("--queue-model",  default="conservative",
+                   choices=["conservative","optimistic"])
     # ML
     p.add_argument("--model-type", default="xgboost",
                    choices=["xgboost","random_forest","logistic"])

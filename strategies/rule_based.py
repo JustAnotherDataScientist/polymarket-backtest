@@ -156,3 +156,149 @@ class FlowMomentumStrategy(Strategy):
             )
 
         return None
+
+
+class LeadBinanceStrategy(Strategy):
+    """
+    Stratégie exploitant le lead signal Binance → Polymarket (~500ms).
+
+    Logique :
+      1. Binance fait un move fort (coin_return_10s_bps > seuil)
+      2. On anticipe que Polymarket va suivre dans ~500ms
+      3. On pose un limit order UP ou DOWN juste au-dessus du bid actuel
+         (maker, 0 frais) avant que le mid ajuste
+      4. Si fillé, on tient jusqu'à la clôture de la fenêtre
+         (ou exit anticipé si take_profit atteint)
+
+    Paramètres :
+      bn_move_bps      : seuil de move Binance 10s pour déclencher (ex: 20)
+      limit_offset     : offset du limit par rapport au bid (ex: 0.01 = +1 tick)
+      min_seconds      : secondes min restantes dans la fenêtre (ex: 60)
+      take_profit_bps  : exit si mid a monté de X bps depuis entrée (0 = hold)
+      stop_loss_bps    : exit si mid a baissé de X bps depuis entrée (0 = non)
+      size_usdc        : montant par trade en USDC
+      queue_model      : "conservative" ou "optimistic"
+      cooldown_ticks   : attendre N ticks après un signal avant de re-signaler
+    """
+
+    def __init__(
+        self,
+        bn_move_bps:     float = 20.0,
+        limit_offset:    float = 0.01,
+        min_seconds:     float = 60.0,
+        take_profit_bps: float = 0.0,
+        stop_loss_bps:   float = 0.0,
+        size_usdc:       float = 100.0,
+        queue_model:     str   = "conservative",
+        cooldown_ticks:  int   = 8,   # ~2s à 4Hz
+    ):
+        super().__init__(name="LeadBinance")
+        self.bn_move_bps     = bn_move_bps
+        self.limit_offset    = limit_offset
+        self.min_seconds     = min_seconds
+        self.take_profit_bps = take_profit_bps
+        self.stop_loss_bps   = stop_loss_bps
+        self.size_usdc       = size_usdc
+        self.queue_model     = queue_model
+        self.cooldown_ticks  = cooldown_ticks
+        self._last_signal_tick: dict = {}   # slug → tick count depuis dernier signal
+        self._entry_mid:        dict = {}   # slug → up_mid à l'entrée
+
+    def on_window_start(self, slug: str, tick) -> None:
+        self._last_signal_tick[slug] = 999  # ready dès le début
+        self._entry_mid.pop(slug, None)
+
+    def on_tick(
+        self,
+        slug:         str,
+        tick,
+        has_position: bool,
+    ) -> Optional[Signal | LimitSignal | ExitSignal]:
+
+        # ── Incrémenter le cooldown ───────────────────────────────────────────
+        self._last_signal_tick[slug] = self._last_signal_tick.get(slug, 999) + 1
+
+        # ── Exit : take profit / stop loss ────────────────────────────────────
+        if has_position:
+            up_mid   = tick.get("up_mid")
+            entry_mid = self._entry_mid.get(slug)
+            if (up_mid is not None and not pd.isna(up_mid)
+                    and entry_mid is not None):
+                up_mid = float(up_mid)
+                move_bps = (up_mid - entry_mid) / entry_mid * 10000
+
+                if self.take_profit_bps > 0 and move_bps >= self.take_profit_bps:
+                    return ExitSignal(slug=slug, reason=f"take_profit +{move_bps:.0f}bps")
+
+                if self.stop_loss_bps > 0 and move_bps <= -self.stop_loss_bps:
+                    return ExitSignal(slug=slug, reason=f"stop_loss {move_bps:.0f}bps")
+            return None
+
+        # ── Filtres pre-entry ─────────────────────────────────────────────────
+        sec = tick.get("seconds_remaining")
+        if sec is None or pd.isna(sec) or float(sec) < self.min_seconds:
+            return None
+
+        # Cooldown
+        if self._last_signal_tick.get(slug, 999) < self.cooldown_ticks:
+            return None
+
+        # ── Signal Binance ────────────────────────────────────────────────────
+        bn_ret = tick.get("coin_return_10s_bps")
+        if bn_ret is None or pd.isna(bn_ret):
+            return None
+        bn_ret = float(bn_ret)
+
+        up_bid  = tick.get("up_bid")
+        up_mid  = tick.get("up_mid")
+        dn_bid  = tick.get("down_bid")
+
+        if any(v is None or pd.isna(v) for v in [up_bid, up_mid, dn_bid]):
+            return None
+
+        up_bid = float(up_bid)
+        up_mid = float(up_mid)
+        dn_bid = float(dn_bid)
+
+        # Move UP sur Binance → acheter UP
+        if bn_ret >= self.bn_move_bps:
+            limit_price = round(up_bid + self.limit_offset, 4)
+            # S'assurer que le limit est sous l'ask (sinon ordre marketable)
+            up_ask = tick.get("up_ask")
+            if up_ask is not None and not pd.isna(up_ask):
+                limit_price = min(limit_price, float(up_ask) - 0.005)
+            if limit_price <= 0 or limit_price >= 1:
+                return None
+
+            self._last_signal_tick[slug] = 0
+            self._entry_mid[slug] = up_mid
+            return LimitSignal(
+                direction    = Direction.UP,
+                size_usdc    = self.size_usdc,
+                limit_price  = limit_price,
+                queue_model  = self.queue_model,
+                confidence   = min(1.0, bn_ret / 100),
+                reason       = f"bn_ret={bn_ret:.1f}bps limit@{limit_price:.4f}",
+            )
+
+        # Move DOWN sur Binance → acheter DOWN
+        if bn_ret <= -self.bn_move_bps:
+            limit_price = round(dn_bid + self.limit_offset, 4)
+            dn_ask = tick.get("down_ask")
+            if dn_ask is not None and not pd.isna(dn_ask):
+                limit_price = min(limit_price, float(dn_ask) - 0.005)
+            if limit_price <= 0 or limit_price >= 1:
+                return None
+
+            self._last_signal_tick[slug] = 0
+            self._entry_mid[slug] = dn_bid  # approximation
+            return LimitSignal(
+                direction    = Direction.DOWN,
+                size_usdc    = self.size_usdc,
+                limit_price  = limit_price,
+                queue_model  = self.queue_model,
+                confidence   = min(1.0, abs(bn_ret) / 100),
+                reason       = f"bn_ret={bn_ret:.1f}bps DOWN limit@{limit_price:.4f}",
+            )
+
+        return None
