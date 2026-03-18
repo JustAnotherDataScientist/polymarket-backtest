@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).parent / "strategies"))
 from execution import (
     simulate_buy, simulate_sell, simulate_buy_down,
     simulate_limit_buy, simulate_limit_buy_down,
-    compute_pnl, TAKER_FEE_BPS, MAKER_FEE_BPS,
+    compute_pnl, poly_taker_fee, MAKER_FEE_BPS,
 )
 
 PASS = "✅"
@@ -104,7 +104,7 @@ def test_buy_simple():
     fill = simulate_buy(tick, 100.0)
 
     tokens_expected   = 100.0 / 0.40
-    fee_expected      = 100.0 * TAKER_FEE_BPS / 10000
+    fee_expected      = poly_taker_fee(100.0, 0.40)   # @ ask=0.40
     net_cost_expected = 100.0 + fee_expected
 
     ok = True
@@ -132,7 +132,7 @@ def test_buy_walk_book():
     tokens_l2    = 100.0 / 0.42
     total_tokens = tokens_l1 + tokens_l2
     avg_expected = 200.0 / total_tokens
-    fee_expected = 200.0 * TAKER_FEE_BPS / 10000
+    fee_expected = poly_taker_fee(200.0, avg_expected)
 
     ok = True
     ok &= check(fill is not None, "Fill exists")
@@ -203,7 +203,7 @@ def test_pnl_early_exit_win():
     exit_f = simulate_sell(tick_exit, tokens * 0.50)
 
     usdc_received = tokens * 0.50
-    fee_exit      = usdc_received * TAKER_FEE_BPS / 10000
+    fee_exit      = poly_taker_fee(usdc_received, 0.50)  # sell @ bid=0.50
     pnl_expected  = (usdc_received - fee_exit) - entry.net_cost
     pnl = compute_pnl(entry, exit_f, "1")
 
@@ -226,7 +226,7 @@ def test_pnl_early_exit_lose():
     exit_f = simulate_sell(tick_exit, tokens * 0.25)
 
     usdc_received = tokens * 0.25
-    fee_exit      = usdc_received * TAKER_FEE_BPS / 10000
+    fee_exit      = poly_taker_fee(usdc_received, 0.25)  # sell @ bid=0.25
     pnl_expected  = (usdc_received - fee_exit) - entry.net_cost
     pnl = compute_pnl(entry, exit_f, "1")
 
@@ -341,9 +341,9 @@ def test_limit_fee_zero():
     ok = True
     ok &= check(market_fill is not None, "Market fill exists")
     if market_fill:
-        expected_taker_fee = 100.0 * TAKER_FEE_BPS / 10000
+        expected_taker_fee = poly_taker_fee(100.0, 0.40)  # @ ask=0.40
         ok &= check(abs(market_fill.fee - expected_taker_fee) < TOL,
-                    f"Market fee = {expected_taker_fee:.4f} ({TAKER_FEE_BPS} bps)",
+                    f"Market fee = {expected_taker_fee:.4f} (poly formula @ p=0.40)",
                     market_fill.fee, expected_taker_fee)
 
     ok &= check(limit_fill is not None, "Limit fill exists")
@@ -357,9 +357,9 @@ def test_limit_fee_zero():
         net_cost_limit  = limit_fill.net_cost
         ok &= check(net_cost_limit < net_cost_market,
                     f"Limit moins cher : {net_cost_limit:.4f} < {net_cost_market:.4f}")
+        fee_pct = (net_cost_market - net_cost_limit) / 100 * 100
         print(f"    → Économie maker vs taker : {net_cost_market - net_cost_limit:.4f} USDC "
-              f"sur 100 USDC ({(net_cost_market - net_cost_limit):.2f} USDC = "
-              f"{TAKER_FEE_BPS} bps)")
+              f"sur 100 USDC ({fee_pct:.2f}% effectif @ p=0.40)")
     return ok
 
 
@@ -403,7 +403,7 @@ def main():
     print("=" * 58)
     print("EXECUTION ENGINE v3 — UNIT TESTS")
     print("=" * 58)
-    print(f"Taker fee: {TAKER_FEE_BPS} bps  |  Maker fee: {MAKER_FEE_BPS} bps")
+    print(f"Taker fee: variable (max 1.56% à p=0.50)  |  Maker fee: {MAKER_FEE_BPS} USDC")
 
     tests = [
         # Market orders (inchangés)

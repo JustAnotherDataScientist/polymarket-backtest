@@ -17,8 +17,54 @@ from typing import Optional
 import numpy as np
 
 
-TAKER_FEE_BPS = 2.0
+# ─────────────────────────────────────────────────────────────────────────────
+# Frais réels Polymarket — marchés crypto 5min et 15min
+# Source : docs.polymarket.com/trading/fees
+#
+# Formule taker : fee = size_usdc × feeRate × (p × (1-p))^exponent
+#   feeRate  = 0.25
+#   exponent = 2
+#   → taux effectif max = 1.5625% à p=0.50, ~0% aux extrêmes
+#
+# Maker : rebate = 20% des frais taker collectés (redistribué quotidiennement)
+#   → coût net maker = 0 USDC (le rebate compense ou dépasse)
+#   → dans le backtest on modélise maker fee = 0 (conservatif)
+# ─────────────────────────────────────────────────────────────────────────────
+
+FEE_RATE      = 0.25   # paramètre feeRate Polymarket crypto
+FEE_EXPONENT  = 2      # paramètre exponent Polymarket crypto
+MAKER_REBATE_PCT = 0.20  # 20% des frais taker redistribués aux makers
+
+# Legacy — gardé pour compatibilité (ne plus utiliser)
+TAKER_FEE_BPS = 2.0   # DEPRECATED — utiliser poly_taker_fee() à la place
 MAKER_FEE_BPS = 0.0
+
+
+def poly_taker_fee(size_usdc: float, avg_price: float) -> float:
+    """
+    Calcule les frais taker réels Polymarket pour les marchés crypto 5min/15min.
+
+    fee = size_usdc × 0.25 × (avg_price × (1 - avg_price))^2
+
+    Taux effectif : 0% aux extrêmes, max 1.5625% à p=0.50
+    Conforme à docs.polymarket.com/trading/fees
+
+    Args:
+        size_usdc  : montant tradé en USDC
+        avg_price  : prix moyen du fill ∈ (0, 1)
+    Returns:
+        fee en USDC (≥ 0, arrondi à 4 décimales)
+    """
+    if avg_price <= 0 or avg_price >= 1:
+        return 0.0
+    rate = FEE_RATE * (avg_price * (1 - avg_price)) ** FEE_EXPONENT
+    fee  = size_usdc * rate
+    return round(fee, 4)
+
+
+def poly_maker_rebate(taker_fee: float) -> float:
+    """Rebate maker = 20% des frais taker (redistribué quotidiennement)."""
+    return round(taker_fee * MAKER_REBATE_PCT, 4)
 
 
 @dataclass
@@ -149,7 +195,7 @@ def simulate_buy(tick: dict, order_size_usdc: float) -> Optional[Fill]:
         return None
 
     avg_price    = filled / tokens if tokens > 0 else best_price
-    fee          = filled * TAKER_FEE_BPS / 10000
+    fee          = poly_taker_fee(filled, avg_price)
     slippage_bps = (avg_price - best_price) / best_price * 10000 if best_price > 0 else 0
 
     depth5     = tick.get("up_ask_depth_top5") or 0
@@ -197,7 +243,7 @@ def simulate_sell(tick: dict, order_size_usdc: float) -> Optional[Fill]:
         return None
 
     avg_price    = usdc_received / tokens_sold if tokens_sold > 0 else best_price
-    fee          = usdc_received * TAKER_FEE_BPS / 10000
+    fee          = poly_taker_fee(usdc_received, avg_price)
     slippage_bps = (best_price - avg_price) / best_price * 10000 if best_price > 0 else 0
 
     depth5     = tick.get("up_bid_depth_top5") or 0
@@ -230,7 +276,7 @@ def simulate_buy_down(tick: dict, order_size_usdc: float) -> Optional[Fill]:
         return None
 
     avg_price    = filled / tokens if tokens > 0 else best_price
-    fee          = filled * TAKER_FEE_BPS / 10000
+    fee          = poly_taker_fee(filled, avg_price)
     slippage_bps = (avg_price - best_price) / best_price * 10000 if best_price > 0 else 0
 
     depth5     = tick.get("down_ask_depth_top5") or 0
@@ -275,7 +321,7 @@ def simulate_sell_down(tick: dict, order_size_usdc: float) -> Optional[Fill]:
         return None
 
     avg_price    = usdc_received / tokens_sold if tokens_sold > 0 else best_price
-    fee          = usdc_received * TAKER_FEE_BPS / 10000
+    fee          = poly_taker_fee(usdc_received, avg_price)
     slippage_bps = (best_price - avg_price) / best_price * 10000 if best_price > 0 else 0
 
     return Fill(
