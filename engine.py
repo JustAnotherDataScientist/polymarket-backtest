@@ -189,7 +189,8 @@ def run(
                 pos = portfolio.positions[slug]
                 tick_dict["_entry_fill_price"] = pos.entry_fill.avg_price
                 tick_dict["_entry_ts"]          = pos.entry_ts
-            signal = strategy.on_tick(slug, tick, has_position)
+                tick_dict["_entry_direction"]   = getattr(pos, "direction", "UP")
+            signal = strategy.on_tick(slug, tick_dict, has_position)
 
             if signal is None:
                 pass
@@ -377,7 +378,8 @@ def run_streaming(
                 pos = portfolio.positions[slug]
                 td["_entry_fill_price"] = pos.entry_fill.avg_price
                 td["_entry_ts"]          = pos.entry_ts
-            signal  = strategy.on_tick(slug, tick, has_pos)
+                td["_entry_direction"]   = getattr(pos, "direction", "UP")
+            signal  = strategy.on_tick(slug, td, has_pos)
 
             if signal is None:
                 pass
