@@ -124,6 +124,29 @@ def load(
     return df
 
 
+
+def get_book(tick: dict, col: str) -> list:
+    """
+    Désérialise une colonne book à la demande (lazy).
+    Appelé par execution.py tick par tick — pas en bulk.
+    Retourne [] si absent ou invalide.
+
+    Args:
+        tick : dict d'un tick (from DataFrame.to_dict() ou iterrows())
+        col  : nom de la colonne book (ex: 'up_book_asks')
+    """
+    val = tick.get(col)
+    if val is None:
+        return []
+    if isinstance(val, list):
+        return val
+    if isinstance(val, str) and val.strip() not in ("", "[]", "None", "nan"):
+        try:
+            return json.loads(val)
+        except (json.JSONDecodeError, ValueError):
+            return []
+    return []
+
 def iter_windows(df: pd.DataFrame) -> Iterator[pd.DataFrame]:
     """
     Iterate over individual market windows (by slug).
