@@ -183,6 +183,12 @@ def run(
 
             # ── 2. Appelle la stratégie ───────────────────────────────────────
             has_position = portfolio.has_position(slug)
+            # Injecter les données du fill dans tick_dict pour la stratégie
+            # → permet take_profit/stop_loss calculés depuis le prix réel du fill
+            if has_position and slug in portfolio.positions:
+                pos = portfolio.positions[slug]
+                tick_dict["_entry_fill_price"] = pos.entry_fill.avg_price
+                tick_dict["_entry_ts"]          = pos.entry_ts
             signal = strategy.on_tick(slug, tick, has_position)
 
             if signal is None:
@@ -366,6 +372,11 @@ def run_streaming(
                 except ValueError: pass
 
             has_pos = portfolio.has_position(slug)
+            # Injecter données du fill pour take_profit/stop_loss précis
+            if has_pos and slug in portfolio.positions:
+                pos = portfolio.positions[slug]
+                td["_entry_fill_price"] = pos.entry_fill.avg_price
+                td["_entry_ts"]          = pos.entry_ts
             signal  = strategy.on_tick(slug, tick, has_pos)
 
             if signal is None:

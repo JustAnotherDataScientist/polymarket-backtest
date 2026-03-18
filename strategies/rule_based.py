@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Optional
 import pandas as pd
 
-from strategies.base import Strategy, Signal, ExitSignal, Direction
+from strategies.base import Strategy, Signal, LimitSignal, ExitSignal, Direction
 
 
 class EdgeZScoreStrategy(Strategy):
@@ -210,6 +210,7 @@ class LeadBinanceStrategy(Strategy):
     def on_window_start(self, slug: str, tick) -> None:
         self._last_signal_tick[slug] = 999  # ready dès le début
         self._entry_mid.pop(slug, None)
+        self._entry_ts.pop(slug, None)
 
     def on_tick(
         self,
@@ -224,20 +225,24 @@ class LeadBinanceStrategy(Strategy):
         # ── Exit : take profit / stop loss / max hold ──────────────────────────
         if has_position:
             up_mid    = tick.get("up_mid")
-            entry_mid = self._entry_mid.get(slug)
-            entry_ts  = self._entry_ts.get(slug)
+            # entry_fill_price est injecté par l'engine dans tick_dict au moment du fill
+            # → référence correcte pour calculer le move depuis l'entrée réelle
+            entry_price = tick.get("_entry_fill_price")  # injecté par engine
+            if entry_price is None:
+                entry_price = self._entry_mid.get(slug)  # fallback signal
+            entry_ts  = tick.get("_entry_ts") or self._entry_ts.get(slug)
             cur_ts    = tick.get("timestamp_utc")
 
             if (up_mid is not None and not pd.isna(up_mid)
-                    and entry_mid is not None and float(entry_mid) > 0):
+                    and entry_price is not None and float(entry_price) > 0):
                 up_mid   = float(up_mid)
-                move_bps = (up_mid - float(entry_mid)) / float(entry_mid) * 10000
+                move_bps = (up_mid - float(entry_price)) / float(entry_price) * 10000
                 if self.take_profit_bps > 0 and move_bps >= self.take_profit_bps:
                     return ExitSignal(slug=slug, reason=f"take_profit +{move_bps:.0f}bps")
                 if self.stop_loss_bps > 0 and move_bps <= -self.stop_loss_bps:
                     return ExitSignal(slug=slug, reason=f"stop_loss {move_bps:.0f}bps")
 
-            # Max hold — sortie forcée après N secondes
+            # Max hold — calculé depuis le fill réel (injecté par engine)
             if (self.max_hold_seconds > 0 and entry_ts is not None
                     and cur_ts is not None):
                 try:

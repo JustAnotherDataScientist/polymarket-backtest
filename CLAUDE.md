@@ -177,6 +177,28 @@ python3 run_backtest.py --dir ~/pm_watcher/historical_data/live \
     --coin btc --interval 5 --start 2026-03-18 --latency 250
 ```
 
+## Bugs connus et corrigés
+
+### ✅ BUG 1 — entry_mid calculé depuis le signal, pas le fill (CORRIGÉ)
+Dans LeadBinanceStrategy, entry_mid était stocké au moment du LimitSignal.
+Mais le fill peut arriver 2 minutes plus tard → move_bps faussé.
+Fix : engine.py injecte `_entry_fill_price` et `_entry_ts` dans tick_dict
+quand une position est ouverte. La stratégie lit ces valeurs en priorité.
+
+### ✅ BUG 2 — on_window_start ne resetait pas _entry_ts (CORRIGÉ)
+_entry_ts pouvait pointer sur une fenêtre précédente.
+Fix : ajout de `self._entry_ts.pop(slug, None)` dans on_window_start.
+
+### ✅ BUG 3 — Latence 0ms = 250ms (DOCUMENTÉ)
+L'ordre est créé en step 4 (signal), les fills sont traités en step 1b
+au tick suivant. Latence minimale réelle = 1 tick = 250ms.
+Fix : défaut changé à 250ms, commentaire MIN_LATENCY_MS dans engine.py.
+
+### ✅ BUG 4 — Bulk json.loads OOM (CORRIGÉ)
+L'ancienne data.py désérialisait tous les JSON books au chargement.
+Sur 1 semaine de données = plusieurs GB RAM → Killed.
+Fix : lazy loading via get_book(), iter_windows_streaming() pour gros datasets.
+
 ## Findings importants
 
 - **Lead signal Binance → Polymarket ~600ms** — les limit orders permettent
