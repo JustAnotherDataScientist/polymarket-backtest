@@ -1,0 +1,15 @@
+# Data
+historical_data/
+*.parquet
+*.wal
+*.log
+
+# Python
+__pycache__/
+*.pyc
+.env
+venv/
+
+# Results
+results/
+*.csv
