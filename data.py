@@ -192,3 +192,25 @@ def iter_windows(df: pd.DataFrame):
 
     for slug, group in df.groupby("slug", sort=False):
         yield group.sort_values("timestamp_utc").reset_index(drop=True)
+
+
+def window_summary(df: pd.DataFrame) -> dict:
+    """
+    Résumé rapide des fenêtres disponibles dans le DataFrame.
+    Utilisé par run_backtest.py pour afficher les stats au démarrage.
+    """
+    total_rows   = len(df)
+    labeled      = df["outcome"].notna().sum() if "outcome" in df.columns else 0
+    total_windows = df["slug"].nunique() if "slug" in df.columns else 0
+    labeled_windows = (
+        df[df["outcome"].notna()]["slug"].nunique()
+        if "outcome" in df.columns and "slug" in df.columns else 0
+    )
+    ts = df["timestamp_utc"] if "timestamp_utc" in df.columns else pd.Series([])
+    date_range = (ts.min(), ts.max()) if len(ts) > 0 else (None, None)
+    return {
+        "total_rows":      total_rows,
+        "labeled_windows": labeled_windows,
+        "total_windows":   total_windows,
+        "date_range":      date_range,
+    }
