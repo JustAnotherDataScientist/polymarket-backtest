@@ -11,6 +11,7 @@ Nouveautés v3 :
   - compute_pnl supporte direction UP et DOWN
 """
 from __future__ import annotations
+from data import get_book
 
 from dataclasses import dataclass, field
 from typing import Optional
@@ -105,8 +106,8 @@ def _build_ask_levels(tick: dict) -> list:
     Priorité 1 : up_book_asks (liste Python [[price, size], ...] désérialisée).
     Fallback : up_ask/up_best_ask_size + ask_l2..l5 (vieux format / tests).
     """
-    book = tick.get("up_book_asks")
-    if book and isinstance(book, list) and len(book) > 0:
+    book = get_book(tick, "up_book_asks")
+    if book:
         return [(float(p), float(s)) for p, s in book if float(s) > 0]
 
     levels = []
@@ -123,8 +124,8 @@ def _build_ask_levels(tick: dict) -> list:
 
 def _build_bid_levels(tick: dict) -> list:
     """Niveaux bid UP (même logique)."""
-    book = tick.get("up_book_bids")
-    if book and isinstance(book, list) and len(book) > 0:
+    book = get_book(tick, "up_book_bids")
+    if book:
         return [(float(p), float(s)) for p, s in book if float(s) > 0]
 
     levels = []
@@ -141,8 +142,8 @@ def _build_bid_levels(tick: dict) -> list:
 
 def _build_down_ask_levels(tick: dict) -> list:
     """Niveaux ask DOWN."""
-    book = tick.get("down_book_asks")
-    if book and isinstance(book, list) and len(book) > 0:
+    book = get_book(tick, "down_book_asks")
+    if book:
         return [(float(p), float(s)) for p, s in book if float(s) > 0]
     levels = []
     p1, s1 = tick.get("down_ask"), tick.get("down_best_ask_size")
@@ -153,8 +154,8 @@ def _build_down_ask_levels(tick: dict) -> list:
 
 def _build_down_bid_levels(tick: dict) -> list:
     """Niveaux bid DOWN."""
-    book = tick.get("down_book_bids")
-    if book and isinstance(book, list) and len(book) > 0:
+    book = get_book(tick, "down_book_bids")
+    if book:
         return [(float(p), float(s)) for p, s in book if float(s) > 0]
     levels = []
     p1, s1 = tick.get("down_bid"), tick.get("down_best_bid_size")
