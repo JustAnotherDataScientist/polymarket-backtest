@@ -194,23 +194,25 @@ class LeadBinanceStrategy(Strategy):
         max_hold_seconds:     float = 30.0,
         size_usdc:            float = 100.0,
         queue_model:          str   = "conservative",
-        cooldown_ticks:       int   = 20,
-        cooldown_after_loss_s:float = 60.0,
+        cooldown_ticks:        int   = 20,
+        cooldown_after_loss_s: float = 60.0,
+        require_trend_aligned: bool  = True,   # coin_return_60s aligné avec signal
     ):
         super().__init__(name="LeadBinance")
-        self.bn_move_bps           = bn_move_bps
-        self.limit_offset          = limit_offset
-        self.min_seconds           = min_seconds
-        self.max_seconds           = max_seconds
-        self.min_prob              = min_prob
-        self.max_prob              = max_prob
-        self.take_profit_bps       = take_profit_bps
-        self.stop_loss_bps         = stop_loss_bps
-        self.max_hold_seconds      = max_hold_seconds
-        self.size_usdc             = size_usdc
-        self.queue_model           = queue_model
-        self.cooldown_ticks        = cooldown_ticks
-        self.cooldown_after_loss_s = cooldown_after_loss_s
+        self.bn_move_bps            = bn_move_bps
+        self.limit_offset           = limit_offset
+        self.min_seconds            = min_seconds
+        self.max_seconds            = max_seconds
+        self.min_prob               = min_prob
+        self.max_prob               = max_prob
+        self.take_profit_bps        = take_profit_bps
+        self.stop_loss_bps          = stop_loss_bps
+        self.max_hold_seconds       = max_hold_seconds
+        self.size_usdc              = size_usdc
+        self.queue_model            = queue_model
+        self.cooldown_ticks         = cooldown_ticks
+        self.cooldown_after_loss_s  = cooldown_after_loss_s
+        self.require_trend_aligned  = require_trend_aligned
         self._last_signal_tick: dict = {}
         self._entry_mid:        dict = {}
         self._entry_ts:         dict = {}
@@ -306,8 +308,14 @@ class LeadBinanceStrategy(Strategy):
         up_mid = float(up_mid)
         dn_bid = float(dn_bid)
 
-        # Move UP sur Binance → acheter UP (filtre prob)
-        if bn_ret >= self.bn_move_bps and self.min_prob <= up_mid <= self.max_prob:
+        # Filtre tendance 60s — éviter les rebonds dans la tendance inverse
+        ret60 = tick.get("coin_return_60s_bps")
+        ret60 = float(ret60) if ret60 is not None and not pd.isna(ret60) else 0.0
+
+        # Move UP sur Binance → acheter UP (filtre prob + tendance)
+        if (bn_ret >= self.bn_move_bps
+                and self.min_prob <= up_mid <= self.max_prob
+                and (not self.require_trend_aligned or ret60 >= 0)):
             limit_price = round(up_bid + self.limit_offset, 4)
             # S'assurer que le limit est sous l'ask (sinon ordre marketable)
             up_ask = tick.get("up_ask")
@@ -328,9 +336,11 @@ class LeadBinanceStrategy(Strategy):
                 reason       = f"bn_ret={bn_ret:.1f}bps limit@{limit_price:.4f}",
             )
 
-        # Move DOWN sur Binance → acheter DOWN (filtre prob inverse)
+        # Move DOWN sur Binance → acheter DOWN (filtre prob inverse + tendance)
         dn_mid = 1.0 - up_mid
-        if bn_ret <= -self.bn_move_bps and self.min_prob <= dn_mid <= self.max_prob:
+        if (bn_ret <= -self.bn_move_bps
+                and self.min_prob <= dn_mid <= self.max_prob
+                and (not self.require_trend_aligned or ret60 <= 0)):
             limit_price = round(dn_bid + self.limit_offset, 4)
             dn_ask = tick.get("down_ask")
             if dn_ask is not None and not pd.isna(dn_ask):
