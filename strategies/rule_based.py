@@ -183,21 +183,27 @@ class LeadBinanceStrategy(Strategy):
 
     def __init__(
         self,
-        bn_move_bps:     float = 20.0,
-        limit_offset:    float = 0.01,
-        min_seconds:     float = 60.0,
-        take_profit_bps: float = 500.0,  # sortie si mid monte de X bps (0=désactivé)
-        stop_loss_bps:   float = 0.0,
-        max_hold_seconds:float = 30.0,   # sortie forcée après N secondes (0=désactivé)
-        size_usdc:       float = 100.0,
-        queue_model:     str   = "conservative",
+        bn_move_bps:          float = 20.0,
+        limit_offset:         float = 0.01,
+        min_seconds:          float = 60.0,
+        max_seconds:          float = 270.0,  # pas d'entree dans les 30 dernieres sec
+        min_prob:             float = 0.0,    # up_mid min pour entrer UP
+        max_prob:             float = 1.0,    # up_mid max pour entrer UP
+        take_profit_bps:      float = 500.0,
+        stop_loss_bps:        float = 0.0,
+        max_hold_seconds:     float = 30.0,
+        size_usdc:            float = 100.0,
+        queue_model:          str   = "conservative",
         cooldown_ticks:       int   = 20,
-        cooldown_after_loss_s:float = 60.0,  # pause apres stop loss (s)
+        cooldown_after_loss_s:float = 60.0,
     ):
         super().__init__(name="LeadBinance")
         self.bn_move_bps           = bn_move_bps
         self.limit_offset          = limit_offset
         self.min_seconds           = min_seconds
+        self.max_seconds           = max_seconds
+        self.min_prob              = min_prob
+        self.max_prob              = max_prob
         self.take_profit_bps       = take_profit_bps
         self.stop_loss_bps         = stop_loss_bps
         self.max_hold_seconds      = max_hold_seconds
@@ -261,7 +267,10 @@ class LeadBinanceStrategy(Strategy):
 
         # ── Filtres pre-entry ─────────────────────────────────────────────────
         sec = tick.get("seconds_remaining")
-        if sec is None or pd.isna(sec) or float(sec) < self.min_seconds:
+        if sec is None or pd.isna(sec):
+            return None
+        sec = float(sec)
+        if sec < self.min_seconds or sec > self.max_seconds:
             return None
 
         # Cooldown ticks
@@ -297,8 +306,8 @@ class LeadBinanceStrategy(Strategy):
         up_mid = float(up_mid)
         dn_bid = float(dn_bid)
 
-        # Move UP sur Binance → acheter UP
-        if bn_ret >= self.bn_move_bps:
+        # Move UP sur Binance → acheter UP (filtre prob)
+        if bn_ret >= self.bn_move_bps and self.min_prob <= up_mid <= self.max_prob:
             limit_price = round(up_bid + self.limit_offset, 4)
             # S'assurer que le limit est sous l'ask (sinon ordre marketable)
             up_ask = tick.get("up_ask")
@@ -319,8 +328,9 @@ class LeadBinanceStrategy(Strategy):
                 reason       = f"bn_ret={bn_ret:.1f}bps limit@{limit_price:.4f}",
             )
 
-        # Move DOWN sur Binance → acheter DOWN
-        if bn_ret <= -self.bn_move_bps:
+        # Move DOWN sur Binance → acheter DOWN (filtre prob inverse)
+        dn_mid = 1.0 - up_mid
+        if bn_ret <= -self.bn_move_bps and self.min_prob <= dn_mid <= self.max_prob:
             limit_price = round(dn_bid + self.limit_offset, 4)
             dn_ask = tick.get("down_ask")
             if dn_ask is not None and not pd.isna(dn_ask):
