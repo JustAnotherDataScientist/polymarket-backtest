@@ -25,9 +25,20 @@ def compute_metrics(trades: List[Trade], initial_capital: float = 10_000.0) -> d
     wins    = pnls > 0
     losses  = pnls < 0
 
-    # Sharpe (annualisé, base journalière)
+    # Sharpe (annualisé)
+    # Estimate trades per year from actual data
+    if len(closed) >= 2:
+        sorted_trades = sorted(closed, key=lambda t: t.exit_ts)
+        span_hours = (sorted_trades[-1].exit_ts - sorted_trades[0].entry_ts).total_seconds() / 3600
+        if span_hours > 0:
+            trades_per_year = len(closed) / span_hours * 8760
+        else:
+            trades_per_year = len(closed) * 252 * 24 * 12  # fallback 5min
+    else:
+        trades_per_year = 252 * 24 * 12
+
     if returns.std() > 0:
-        sharpe = (returns.mean() / returns.std()) * np.sqrt(252 * 24 * 12)  # 5min windows
+        sharpe = (returns.mean() / returns.std()) * np.sqrt(trades_per_year)
     else:
         sharpe = 0.0
 

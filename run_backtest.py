@@ -29,7 +29,6 @@ sys.path.insert(0, str(Path(__file__).parent / "strategies"))
 
 import data as D
 import engine as E
-import data as D
 from metrics import print_report
 from strategies.rule_based import EdgeZScoreStrategy, FlowMomentumStrategy, LeadBinanceStrategy
 from strategies.ml_based   import MLStrategy, train_model

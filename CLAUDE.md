@@ -216,3 +216,20 @@ Fix : lazy loading via get_book(), iter_windows_streaming() pour gros datasets.
 
 - **polymarket-logger** : source des données (`~/pm_watcher/historical_data/live/`)
 - **polymarket-strategies** (à venir) : stratégies live
+
+## Bugs corrigés — session Opus 2026-03-19
+
+### ✅ BUG 5 — Sharpe annualisé avec facteur fixe 5min (CORRIGÉ)
+Le Sharpe utilisait `sqrt(252×24×12)` (= fenêtres 5min) même pour les trades
+sur fenêtres 15min. Fix : calcul du trades/year à partir du span réel des données.
+
+### ✅ BUG 6 — LeadBinanceStrategy dn_mid = 1.0 - up_mid (CORRIGÉ)
+Approximation qui ignore le spread (1-5% d'écart possible).
+Fix : lit `down_mid` directement du tick, fallback 1-up_mid si absent.
+
+### ✅ BUG 7 — run_backtest.py import dupliqué `import data as D` (CORRIGÉ)
+
+### ⚠ NOTE — engine.py `market_impact` param inutilisé
+Le paramètre est propagé mais jamais consommé dans la simulation.
+L'impact partiel existe dans simulate_buy() (via depth5) mais le flag
+`market_impact=True/False` ne le contrôle pas. Documenté, à implémenter.

@@ -58,12 +58,20 @@ def prepare_labels(df: pd.DataFrame) -> pd.Series:
     return pd.to_numeric(labels, errors="coerce")
 
 
-def train_model(df: pd.DataFrame, model_type: str = "xgboost") -> Any:
+def train_model(
+    df: pd.DataFrame,
+    model_type: str = "xgboost",
+    train_ratio: float = 0.7,
+) -> Any:
     """
-    Entraîne un modèle sur les données historiques.
+    Entraîne un modèle sur les données historiques avec split temporel.
+
+    IMPORTANT : split temporel (pas aléatoire) pour éviter le data leakage.
+    Les 70% premiers ticks servent à l'entraînement, les 30% derniers à la validation.
 
     df         : DataFrame complet (doit avoir outcome rempli)
     model_type : "xgboost", "random_forest", "logistic"
+    train_ratio: proportion des données pour l'entraînement (défaut: 0.7)
 
     Retourne le modèle entraîné.
     """
@@ -76,6 +84,15 @@ def train_model(df: pd.DataFrame, model_type: str = "xgboost") -> Any:
 
     if len(X) == 0:
         raise ValueError("No labeled samples — run backfill_outcomes.py first")
+
+    # Split temporel : train sur les premiers 70%, test sur les derniers 30%
+    # JAMAIS de split aléatoire — ça introduit du data leakage temporel
+    split_idx = int(len(X) * train_ratio)
+    X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
+    y_train, y_test = y.iloc[:split_idx], y.iloc[split_idx:]
+
+    if len(X_train) == 0 or len(X_test) == 0:
+        raise ValueError(f"Split trop petit: train={len(X_train)}, test={len(X_test)}")
 
     if model_type == "xgboost":
         try:
@@ -107,8 +124,15 @@ def train_model(df: pd.DataFrame, model_type: str = "xgboost") -> Any:
     else:
         raise ValueError(f"Unknown model_type: {model_type}")
 
-    model.fit(X, y)
-    print(f"Model trained on {len(X):,} samples ({y.mean()*100:.1f}% UP)")
+    model.fit(X_train, y_train)
+
+    # Validation out-of-sample
+    train_acc = (model.predict(X_train) == y_train).mean() * 100
+    test_acc  = (model.predict(X_test) == y_test).mean() * 100
+    print(f"Model trained on {len(X_train):,} samples ({y_train.mean()*100:.1f}% UP)")
+    print(f"  Train accuracy: {train_acc:.1f}%  |  Test accuracy: {test_acc:.1f}%")
+    if train_acc - test_acc > 15:
+        print(f"  ⚠ Probable overfitting (train-test gap = {train_acc - test_acc:.1f}%)")
     return model
 
 

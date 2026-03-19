@@ -69,7 +69,9 @@ def run(
     strategy:        Strategy,
     initial_capital: float = 10_000.0,
     latency_ms:      float = 250.0,    # latence en ms (min réel = 250ms = 1 tick)
-    market_impact:   bool  = True,     # ← NOUVEAU : modéliser impact
+    market_impact:   bool  = True,     # TODO: non implémenté — réservé pour v2
+                                       # Actuellement, l'impact est partiellement modélisé
+                                       # via simulate_buy() market_impact_bps si depth5 > 0
     verbose:         bool  = False,
     max_positions:   int   = 4,
     allow_multi:     bool  = False,

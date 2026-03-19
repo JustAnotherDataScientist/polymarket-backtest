@@ -346,7 +346,11 @@ class LeadBinanceStrategy(Strategy):
             )
 
         # Move DOWN sur Binance → acheter DOWN (filtre prob inverse + tendance)
-        dn_mid = 1.0 - up_mid
+        dn_mid_val = tick.get("down_mid")
+        if dn_mid_val is not None and not pd.isna(dn_mid_val):
+            dn_mid = float(dn_mid_val)
+        else:
+            dn_mid = 1.0 - up_mid  # fallback si down_mid absent
         if (bn_ret <= -self.bn_move_bps
                 and self.min_prob <= dn_mid <= self.max_prob
                 and (not self.require_trend_aligned or ret60 <= 0)):
