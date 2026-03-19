@@ -137,15 +137,23 @@ def test_latency(df, capital):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--dir",     default="historical_data/live")
-    p.add_argument("--capital", type=float, default=10_000.0)
+    p.add_argument("--dir",      default="historical_data/live")
+    p.add_argument("--capital",  type=float, default=10_000.0)
+    p.add_argument("--coin",     default=None, help="Filter by coin (btc, eth, sol, xrp)")
+    p.add_argument("--interval", type=int, default=None, help="Filter by interval (5, 15)")
+    p.add_argument("--max-days", type=int, default=2, help="Max days to load (default: 2, avoids OOM)")
     args = p.parse_args()
 
     print("=" * 55)
     print("BACKTEST ENGINE VALIDATION")
     print("=" * 55)
 
-    df = D.load(args.dir)
+    # Compute start date from max-days
+    from datetime import datetime, timezone, timedelta
+    start_date = (datetime.now(timezone.utc) - timedelta(days=args.max_days)).strftime("%Y-%m-%d")
+    print(f"Loading: coin={args.coin or 'all'}  interval={args.interval or 'all'}  since={start_date}")
+
+    df = D.load(args.dir, coin=args.coin, interval=args.interval, start_date=start_date)
     s  = D.window_summary(df)
     print(f"Data: {s['total_rows']:,} rows  |  "
           f"{s['labeled_windows']}/{s['total_windows']} labeled windows")

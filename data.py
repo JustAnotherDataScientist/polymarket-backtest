@@ -79,10 +79,24 @@ def load(
     dfs = []
     for f in files:
         try:
-            dfs.append(pd.read_parquet(f))
+            chunk = pd.read_parquet(f)
+            # ── CRITICAL: filter DURING load, not after ──────────────
+            # Without this, loading 393 chunks = 3+ GB RAM → OOM on t3.small
+            if coin:
+                chunk = chunk[chunk["coin"] == coin]
+            if interval:
+                chunk = chunk[chunk["interval_min"].astype(str) == str(interval)]
+            if chunk.empty:
+                continue
+            dfs.append(chunk)
         except Exception as e:
             print(f"WARNING: could not read {f.name}: {e}")
 
+    if not dfs:
+        raise FileNotFoundError(
+            f"No data found in {live_dir} "
+            f"(coin={coin}, interval={interval}, start={start_date}, end={end_date})"
+        )
     df = pd.concat(dfs, ignore_index=True)
 
     # Normalize timestamps
@@ -106,11 +120,8 @@ def load(
     # sont intentionnellement laissées en string.
     # Utiliser get_book(tick, col) dans l'engine pour désérialiser lazily.
 
-    # Filters
-    if coin:
-        df = df[df["coin"] == coin]
-    if interval:
-        df = df[df["interval_min"].astype(str) == str(interval)]
+    # coin/interval filtering is done during loading (see above)
+    # No need to filter again here
 
     df = df.sort_values("timestamp_utc").reset_index(drop=True)
     return df
