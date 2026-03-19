@@ -125,12 +125,13 @@ def run_mm(
     """
     cash       = initial_capital
     inventory  = {}   # slug → MMInventory
-    trades     = []   # list[MMTrade]
-    quotes     = {}   # slug → MMQuotes (ordres actifs)
+    quotes        = {}   # slug → MMQuotes (ordres actifs)
 
-    n_windows  = 0
-    n_skipped  = 0
-    total_spread_pnl = 0.0
+    n_windows     = 0
+    n_skipped     = 0
+    n_trades      = 0
+    n_spread_wins = 0
+    total_spread_pnl    = 0.0
     total_inventory_pnl = 0.0
 
     MM_COLS = [
@@ -162,9 +163,12 @@ def run_mm(
         current_quotes: Optional[MMQuotes] = None
         prev_trade_count: float = 0.0
 
-        for _, tick in window.iterrows():
-            td  = tick.to_dict()
-            ts  = tick["timestamp_utc"]
+        tick_records = window.to_dict("records")
+        last_tick    = window.iloc[-1].to_dict()
+        del window
+
+        for td in tick_records:
+            ts = td["timestamp_utc"]
 
             # Colonnes utiles
             up_mid   = float(td.get("up_mid") or 0)
@@ -232,12 +236,9 @@ def run_mm(
                     inv.spread_earned += spread_pnl
                     total_spread_pnl += spread_pnl
 
-                    trade = MMTrade(
-                        ts=ts, slug=slug, side=quote.side, direction=quote.direction,
-                        price=quote.price, size_usdc=quote.size_usdc, fee=fee,
-                        pnl_spread=spread_pnl, reason="mm_fill"
-                    )
-                    trades.append(trade)
+                    n_trades += 1
+                    if spread_pnl > 0:
+                        n_spread_wins += 1
 
                     if verbose:
                         logger.info("[%s] MM FILL %s %s @%.4f size=%.0f spread_pnl=%+.3f",
@@ -249,10 +250,10 @@ def run_mm(
             prev_trade_count = curr_trade_count
 
         # ── Fin de fenêtre : liquider l'inventaire au mid ───────────────────
-        strategy.on_window_end(slug, window.iloc[-1].to_dict())
+        strategy.on_window_end(slug, last_tick)
 
-        up_mid_final   = float(window.iloc[-1].get("up_mid") or 0)
-        down_mid_final = float(window.iloc[-1].get("down_mid") or 0)
+        up_mid_final   = float(last_tick.get("up_mid") or 0)
+        down_mid_final = float(last_tick.get("down_mid") or 0)
 
         # PnL inventaire : tokens × (mid_final - cost_basis)
         pnl_up   = inv.tokens_up   * (up_mid_final - inv.cost_basis_up)
@@ -273,12 +274,10 @@ def run_mm(
 
         # Reset inventaire + libérer fenêtre
         del inventory[slug]
-        del window
+        del tick_records
         current_quotes = None
 
     total_pnl = cash - initial_capital
-    n_trades  = len(trades)
-    spread_trades = [t for t in trades if t.pnl_spread > 0]
 
     return {
         "total_pnl":          total_pnl,
@@ -287,9 +286,6 @@ def run_mm(
         "n_trades":           n_trades,
         "n_windows":          n_windows,
         "n_skipped":          n_skipped,
-        "n_spread_wins":      len(spread_trades),
-        "avg_spread_pnl":     np.mean([t.pnl_spread for t in trades]) if trades else 0,
-        "trades":             trades,
+        "n_spread_wins":      n_spread_wins,
         "cash":               cash,
-        "inventory":          inventory,
     }
