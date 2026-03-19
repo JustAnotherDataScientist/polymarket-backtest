@@ -197,8 +197,30 @@ def iter_windows_streaming(
     if not files:
         raise FileNotFoundError(f"Aucun parquet dans {live_dir}")
 
-    # Accumuler les ticks par slug en lisant les fichiers un par un
-    slug_buffers: dict = {}
+    # ── Vrai streaming : yield par slug au fur et à mesure ──────────────────
+    # Chaque slug = une fenêtre de marché (ex: btc-updown-5m-1773863100)
+    # Le timestamp de fin de fenêtre est encodé dans le nom du slug.
+    # On yield un slug dès qu'on détecte qu'on est passé à une fenêtre suivante
+    # pour ce même marché → RAM = O(1 fenêtre par marché) au lieu de O(tout)
+
+    slug_buffers: dict = {}   # slug → list[DataFrame]
+    slug_market:  dict = {}   # slug → (coin, interval, window_start_ts)
+    all_slugs_seen: set = set()
+
+    def _parse_window_ts(slug: str) -> int:
+        """Extrait le timestamp de début de fenêtre depuis le slug name."""
+        try:
+            return int(slug.rsplit("-", 1)[-1])
+        except Exception:
+            return 0
+
+    def _market_key(slug: str) -> str:
+        """Retourne la clé marché sans le timestamp (ex: btc-updown-5m)."""
+        parts = slug.rsplit("-", 1)
+        return parts[0] if len(parts) == 2 else slug
+
+    # market_key → slug actif pour ce marché
+    active_slug: dict = {}
 
     for fpath in files:
         try:
@@ -207,7 +229,6 @@ def iter_windows_streaming(
             print(f"  ⚠ {fpath.name} illisible : {e}")
             continue
 
-        # Filtres
         if coin:
             df_file = df_file[df_file["coin"] == coin]
         if interval:
@@ -219,23 +240,33 @@ def iter_windows_streaming(
         df_file["timestamp_utc"] = pd.to_datetime(
             df_file["timestamp_utc"], utc=True, errors="coerce"
         )
-
-        # Colonnes numériques
         for col in NUMERIC_COLS:
             if col in df_file.columns:
                 df_file[col] = pd.to_numeric(df_file[col], errors="coerce")
 
-        # Grouper par slug dans ce chunk
         for slug, grp in df_file.groupby("slug", sort=False):
+            mk = _market_key(slug)
+            prev_slug = active_slug.get(mk)
+
+            # Nouveau slug pour ce marché → yield le précédent si complet
+            if prev_slug is not None and prev_slug != slug:
+                if prev_slug in slug_buffers and slug_buffers[prev_slug]:
+                    window = pd.concat(slug_buffers[prev_slug], ignore_index=True)
+                    window = window.sort_values("timestamp_utc").reset_index(drop=True)
+                    del slug_buffers[prev_slug]
+                    yield window
+
+            active_slug[mk] = slug
             if slug not in slug_buffers:
                 slug_buffers[slug] = []
             slug_buffers[slug].append(grp)
 
-    # Yield chaque fenêtre complète
-    for slug, chunks_list in sorted(slug_buffers.items()):
-        window = pd.concat(chunks_list, ignore_index=True)
-        window = window.sort_values("timestamp_utc").reset_index(drop=True)
-        yield window
+    # Yield les fenêtres restantes (dernières de chaque marché)
+    for slug in sorted(slug_buffers.keys()):
+        if slug_buffers[slug]:
+            window = pd.concat(slug_buffers[slug], ignore_index=True)
+            window = window.sort_values("timestamp_utc").reset_index(drop=True)
+            yield window
 
 
 def window_summary(df: pd.DataFrame) -> dict:
