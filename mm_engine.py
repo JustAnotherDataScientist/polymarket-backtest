@@ -124,13 +124,14 @@ def run_mm(
     Le moteur simule les fills, met à jour l'inventaire, calcule le PnL.
     """
     cash       = initial_capital
-    inventory  = {}   # slug → MMInventory
-    trades     = []   # list[MMTrade]
+    inventory  = {}   # slug → MMInventory (reset après chaque fenêtre)
     quotes     = {}   # slug → MMQuotes (ordres actifs)
 
-    n_windows  = 0
-    n_skipped  = 0
-    total_spread_pnl = 0.0
+    n_windows    = 0
+    n_skipped    = 0
+    n_trades     = 0
+    n_spread_wins = 0
+    total_spread_pnl    = 0.0
     total_inventory_pnl = 0.0
 
     for window in iter_windows_streaming(live_dir, coin, interval):
@@ -220,13 +221,9 @@ def run_mm(
                     inv.n_fills += 1
                     inv.spread_earned += spread_pnl
                     total_spread_pnl += spread_pnl
-
-                    trade = MMTrade(
-                        ts=ts, slug=slug, side=quote.side, direction=quote.direction,
-                        price=quote.price, size_usdc=quote.size_usdc, fee=fee,
-                        pnl_spread=spread_pnl, reason="mm_fill"
-                    )
-                    trades.append(trade)
+                    n_trades += 1
+                    if spread_pnl > 0:
+                        n_spread_wins += 1
 
                     if verbose:
                         logger.info("[%s] MM FILL %s %s @%.4f size=%.0f spread_pnl=%+.3f",
@@ -260,13 +257,11 @@ def run_mm(
         cash += inv.tokens_up * (1.0 if outcome_val in ("1","1.0") else 0.0)
         cash += inv.tokens_down * (0.0 if outcome_val in ("1","1.0") else 1.0)
 
-        # Reset inventaire pour la prochaine fenêtre
-        inventory[slug] = MMInventory(slug=slug)
+        # Reset inventaire pour la prochaine fenêtre — libérer la RAM
+        del inventory[slug]
         current_quotes = None
 
     total_pnl = cash - initial_capital
-    n_trades  = len(trades)
-    spread_trades = [t for t in trades if t.pnl_spread > 0]
 
     return {
         "total_pnl":          total_pnl,
@@ -275,9 +270,6 @@ def run_mm(
         "n_trades":           n_trades,
         "n_windows":          n_windows,
         "n_skipped":          n_skipped,
-        "n_spread_wins":      len(spread_trades),
-        "avg_spread_pnl":     np.mean([t.pnl_spread for t in trades]) if trades else 0,
-        "trades":             trades,
+        "n_spread_wins":      n_spread_wins,
         "cash":               cash,
-        "inventory":          inventory,
     }
